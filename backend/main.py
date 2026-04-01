@@ -3,13 +3,22 @@ ThumbnailAI - FastAPI Backend
 AI-powered YouTube thumbnail generation with face consistency
 """
 
+import logging
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import replicate
 import os
+import json
 from dotenv import load_dotenv
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -78,7 +87,18 @@ async def generate_thumbnail(request: ThumbnailRequest):
     """
     Generate AI thumbnail using FLUX.1 model
     """
+    logger.info("=" * 50)
+    logger.info("RECEIVED GENERATION REQUEST")
+    logger.info(f"Request data: {json.dumps(request.dict(), indent=2)}")
+
     try:
+        # Check API token
+        api_token = os.getenv("REPLICATE_API_TOKEN")
+        if not api_token:
+            logger.error("REPLICATE_API_TOKEN not set in environment")
+            raise HTTPException(status_code=500, detail="Server configuration error: REPLICATE_API_TOKEN not set")
+        logger.info(f"REPLICATE_API_TOKEN found (starts with: {api_token[:5]}...)")
+
         # Build prompt based on style
         style_prompts = {
             "youtube": "YouTube thumbnail, bold colors, high contrast, expressive, clickbait style, 16:9 aspect ratio",
@@ -89,42 +109,58 @@ async def generate_thumbnail(request: ThumbnailRequest):
         }
 
         base_prompt = f"{request.prompt}, {style_prompts.get(request.style, style_prompts['youtube'])}"
+        logger.info(f"Final prompt: {base_prompt}")
 
         if request.text_overlay:
             base_prompt += f", text overlay: '{request.text_overlay}'"
+            logger.info(f"Added text overlay: {request.text_overlay}")
 
-        # Resolution settings
-        resolution_map = {
-            "720p": (1280, 720),
-            "1080p": (1920, 1080),
-            "4K": (3840, 2160)
-        }
-        width, height = resolution_map.get(request.resolution, (1920, 1080))
-
-        # Generate with FLUX.1 Schnell (fast, cost-effective)
+        logger.info("Calling Replicate API...")
+        # Generate with FLUX.1 Schnell using specific version
         output = replicate.run(
-            "black-forest-labs/flux-schnell",
+            "black-forest-labs/flux-schnell:c846a69991daf4c0e5d016514849d14ee5b2e6846ce6b9d6f21369e564cfe51e",
             input={
                 "prompt": base_prompt,
                 "aspect_ratio": "16:9",
                 "output_format": "webp",
                 "output_quality": 90,
-                "num_inference_steps": 4  # Fast generation
+                "num_inference_steps": 4
             }
         )
+        logger.info(f"Replicate API response: {type(output)}")
 
-        # Handle output (Replicate returns a list of image URLs)
-        image_urls = output if isinstance(output, list) else [output]
+        # Handle output (Replicate returns FileOutput objects, need to convert to URLs)
+        if isinstance(output, list):
+            image_urls = [str(item) for item in output]
+        else:
+            image_urls = [str(output)]
+        logger.info(f"Generated image URLs: {image_urls}")
 
-        return ThumbnailResponse(
+        response = ThumbnailResponse(
             id=f"thumb_{os.urandom(8).hex()}",
             image_urls=image_urls,
             prompt=request.prompt,
             status="completed",
             created_at="now"
         )
+        logger.info(f"SUCCESS - Returning response: {response.id}")
+        logger.info("=" * 50)
+        return response
 
+    except HTTPException:
+        logger.error("HTTPException raised")
+        raise
     except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Exception occurred: {type(e).__name__}: {error_msg}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        if "Insufficient credit" in error_msg:
+            logger.error("User has insufficient credit on Replicate")
+            raise HTTPException(
+                status_code=500,
+                detail="Insufficient Replicate credit. Please add funds at https://replicate.com/account/billing"
+            )
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
 
 

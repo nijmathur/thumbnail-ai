@@ -31,8 +31,23 @@ export default function Home() {
     e.preventDefault()
     setLoading(true)
 
+    // Log request details
+    console.log('=== THUMBNAIL GENERATION REQUEST ===')
+    console.log('API URL:', process.env.NEXT_PUBLIC_API_URL)
+    console.log('Request payload:', {
+      prompt,
+      style,
+      resolution,
+      text_overlay: textOverlay || undefined,
+      variations,
+      face_image_url: faceImage || undefined,
+    })
+
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/generate`, {
+      const apiUrl = `${process.env.NEXT_PUBLIC_API_URL}/api/generate`
+      console.log('Fetching:', apiUrl)
+
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -45,15 +60,23 @@ export default function Home() {
         }),
       })
 
+      console.log('Response status:', response.status, response.statusText)
       const data = await response.json()
-      if (data.image_urls) {
+      console.log('Response data:', data)
+
+      if (response.ok && data.image_urls) {
+        console.log('SUCCESS: Images generated:', data.image_urls)
         setResults(data.image_urls)
+      } else {
+        console.error('API Error:', data)
+        alert(`Generation failed: ${data.detail || 'Unknown error'}`)
       }
     } catch (error) {
       console.error('Generation failed:', error)
-      alert('Generation failed. Please try again.')
+      alert(`Generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
     } finally {
       setLoading(false)
+      console.log('=== REQUEST COMPLETE ===')
     }
   }
 
